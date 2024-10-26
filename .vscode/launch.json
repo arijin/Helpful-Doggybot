@@ -1,0 +1,37 @@
+// {
+//   "version": "0.2.0",
+//   "configurations": [
+//     {
+//       "name": "Python: play2.py",
+//       "type": "debugpy",
+//       "request": "launch",
+//       "program": "play2.py",
+//       "console": "integratedTerminal",
+//       "cwd": "${workspaceFolder}/whole_body_controller/legged_gym/legged_gym/scripts",
+//       "args": [
+//         "--task", "a1",
+//         // "--exptid", "Oct-1010-a1",
+//         "--exptid", "Oct-1013-a1-nofeet-notype",
+//       ]
+//     }
+//   ]
+// }
+
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Python: play2.py",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "viz_terrian.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}/whole_body_controller/legged_gym/legged_gym/scripts",
+      "args": [
+        "--task", "a1",
+        // "--exptid", "Oct-1010-a1",
+        "--exptid", "Oct-1013-a1-nofeet-notype",
+      ]
+    }
+  ]
+}
