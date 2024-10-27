@@ -43,6 +43,9 @@ from .go1.go1_config import Go1RoughCfg, Go1RoughCfgPPO
 from .go2.go2_config import Go2RoughCfg, Go2RoughCfgPPO
 from .go2.go2 import Go2
 
+from .e1.legged_robot_obstacle import LeggedRobotObstacle
+from .e1.legged_robot_obstacle_config import LeggedRobotObsCfg
+
 import os
 
 from legged_gym.utils.task_registry import task_registry
@@ -54,3 +57,6 @@ from legged_gym.utils.task_registry import task_registry
 task_registry.register( "a1", LeggedRobot, A1ParkourCfg(), A1ParkourCfgPPO() )
 task_registry.register( "go1", LeggedRobot, Go1RoughCfg(), Go1RoughCfgPPO() )
 task_registry.register( "go2", Go2, Go2RoughCfg(), Go2RoughCfgPPO() )
+
+task_registry.register( "e1", LeggedRobotObstacle, LeggedRobotObsCfg(), A1ParkourCfgPPO() )
+

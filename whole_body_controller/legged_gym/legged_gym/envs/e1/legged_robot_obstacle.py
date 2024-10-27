@@ -48,7 +48,8 @@ from legged_gym.utils.terrain import TerrainObstacle
 from legged_gym.utils.math import *
 from legged_gym.utils.helpers import class_to_dict
 from scipy.spatial.transform import Rotation as R
-from .legged_robot_config import LeggedRobotCfg
+from ..base.legged_robot_config import LeggedRobotCfg
+from .legged_robot_config_obstacle import LeggedRobotObsCfg
 
 from tqdm import tqdm
 import cv2
@@ -76,8 +77,8 @@ def euler_from_quaternion(quat_angle):
      
         return roll_x, pitch_y, yaw_z # in radians
 
-class LeggedRobot(BaseTask):
-    def __init__(self, cfg: LeggedRobotCfg, sim_params, physics_engine, sim_device, headless):
+class LeggedRobotObstacle(BaseTask):
+    def __init__(self, cfg, sim_params, physics_engine, sim_device, headless):
         """ Parses the provided config file,
             calls create_sim() (which creates, simulation, terrain and environments),
             initilizes pytorch buffers used during training
