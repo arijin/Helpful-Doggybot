@@ -34,7 +34,7 @@ from torch.nn.modules.pooling import MaxPool2d
 from  legged_gym.envs.base.base_config import BaseConfig
 import torch.nn as nn
 
-class E1ObsCfg(BaseConfig):
+class LeggedRobotObsCfg(BaseConfig):
     class play:
         load_student_config = False
         mask_priv_obs = False
@@ -136,7 +136,7 @@ class E1ObsCfg(BaseConfig):
             height_measurements = 0.02
 
     class terrain:
-        mesh_type = 'trimesh' # "heightfield" # none, plane, heightfield or trimesh
+        mesh_type = 'obstacle' # "heightfield" # none, plane, heightfield or trimesh
         hf2mesh_method = "grid"  # grid or fast
         max_error = 0.1 # for fast
         max_error_camera = 2

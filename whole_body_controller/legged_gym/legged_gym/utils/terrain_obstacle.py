@@ -80,7 +80,7 @@ class TerrainObstacle:
             # self.randomized_terrain()   
         
         self.heightsamples = self.height_field_raw
-        if self.type=="trimesh":
+        if self.type=="trimesh" or self.type=="obstacle":
             print("Converting heightmap to trimesh...")
             if cfg.hf2mesh_method == "grid":
                 self.vertices, self.triangles, self.x_edge_mask = convert_heightfield_to_trimesh(   self.height_field_raw,
@@ -150,7 +150,7 @@ class TerrainObstacle:
         height = random.uniform(self.cfg.height[0], max_height)
         terrain_utils.random_uniform_terrain(terrain, min_height=-height, max_height=height, step=0.005, downsampled_scale=self.cfg.downsampled_scale)
 
-    def make_terrain(self, difficulty):
+    def make_terrain(self, choice, difficulty):
         terrain = terrain_utils.SubTerrain(   "terrain",
                                 width=self.length_per_env_pixels,
                                 length=self.width_per_env_pixels,

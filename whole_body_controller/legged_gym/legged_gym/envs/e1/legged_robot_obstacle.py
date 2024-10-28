@@ -44,12 +44,12 @@ from typing import Tuple, Dict
 from legged_gym import LEGGED_GYM_ROOT_DIR
 from legged_gym.envs.base.base_task import BaseTask
 from legged_gym.utils.terrain import Terrain
-from legged_gym.utils.terrain import TerrainObstacle
+from legged_gym.utils.terrain_obstacle import TerrainObstacle
 from legged_gym.utils.math import *
 from legged_gym.utils.helpers import class_to_dict
 from scipy.spatial.transform import Rotation as R
 from ..base.legged_robot_config import LeggedRobotCfg
-from .legged_robot_config_obstacle import LeggedRobotObsCfg
+from .legged_robot_obstacle_config import LeggedRobotObsCfg
 
 from tqdm import tqdm
 import cv2
@@ -262,7 +262,8 @@ class LeggedRobotObstacle(BaseTask):
 
         # self.cur_goals = self._gather_cur_goals()
         # self.next_goals = self._gather_cur_goals(future=1)
-        self.cur_goals[self.reached_goal_ids], self.next_goals[self.reached_goal_ids] = self._generate_cur_goals(self.cur_goals[self.reached_goal_ids])
+        if self.reached_goal_ids.any():
+            self.cur_goals[self.reached_goal_ids], self.next_goals[self.reached_goal_ids] = self._generate_cur_goals()
 
         self.update_depth_buffer()
 
@@ -464,11 +465,12 @@ class LeggedRobotObstacle(BaseTask):
             self.terrain = Terrain(self.cfg.terrain, self.num_envs)
         elif mesh_type=='obstacle':
             self.terrain = TerrainObstacle(self.cfg.terrain, self.num_envs)
-        elif mesh_type=='plane':
+            
+        if mesh_type=='plane':
             self._create_ground_plane()
         elif mesh_type=='heightfield':
             self._create_heightfield()
-        elif mesh_type=='trimesh':
+        elif mesh_type=='trimesh' or mesh_type=="obstacle":
             self._create_trimesh()
         elif mesh_type is not None:
             raise ValueError("Terrain mesh type not recognised. Allowed types are [None, plane, heightfield, trimesh]")
@@ -576,25 +578,28 @@ class LeggedRobotObstacle(BaseTask):
     def _gather_cur_goals(self, future=0):
         return self.env_goals.gather(1, (self.cur_goal_idx[:, None, None]+future).expand(-1, -1, self.env_goals.shape[-1])).squeeze(1)
 
-    def _generate_cur_goals(self, current_goals):
+    def _generate_cur_goals(self):
+        current_goals = self.cur_goals[self.reached_goal_ids]
+        current_boundaries = self.env_boundaries[self.reached_goal_ids]
+        
         # Define minimum and maximum distances for the new goal
-        min_dist = self.cfg.env.min_goal_distance
-        max_dist = self.cfg.env.max_goal_distance
+        min_dist = torch.tensor(self.cfg.env.min_goal_distance, device=self.device)
+        max_dist = torch.tensor(self.cfg.env.max_goal_distance, device=self.device)
         
         # Randomly generate new goal points within a certain range
         direction = torch.randn_like(current_goals[:, :2])  # Random direction
         direction = direction / torch.norm(direction, dim=1, keepdim=True)  # Normalize direction
         
         # Generate random distances between min_dist and max_dist
-        distances = (max_dist - min_dist) * torch.rand(current_goals.shape[0], 1) + min_dist
+        distances = (max_dist - min_dist) * torch.rand(current_goals.shape[0], 1, device=self.device) + min_dist
         
         # Calculate new goal positions
         new_goals = current_goals[:, :2] + direction * distances
         next_new_goals = current_goals[:, :2] + direction * distances * 1.1
         
         # 将目标点限制在边界范围内
-        x_min, x_max = self.env_boundaries[:, 0]+0.5, self.env_boundaries[:, 1]-0.5
-        y_min, y_max = self.env_boundaries[:, 2]+0.5, self.env_boundaries[:, 3]-0.5
+        x_min, x_max = current_boundaries[:, 0]+0.5, current_boundaries[:, 1]-0.5
+        y_min, y_max = current_boundaries[:, 2]+0.5, current_boundaries[:, 3]-0.5
         
         # 限制 new_goals 和 next_new_goals 在边界范围内
         new_goals[:, 0] = torch.clamp(new_goals[:, 0], x_min, x_max)
@@ -1054,7 +1059,7 @@ class LeggedRobotObstacle(BaseTask):
         """ Sets environment origins. On rough terrain the origins are defined by the terrain platforms.
             Otherwise create a grid.
         """
-        if self.cfg.terrain.mesh_type in ["heightfield", "trimesh"]:
+        if self.cfg.terrain.mesh_type in ["heightfield", "trimesh", "obstacle"]:
             self.custom_origins = True
             self.env_origins = torch.zeros(self.num_envs, 3, device=self.device, requires_grad=False)
             self.env_class = torch.zeros(self.num_envs, device=self.device, requires_grad=False)
