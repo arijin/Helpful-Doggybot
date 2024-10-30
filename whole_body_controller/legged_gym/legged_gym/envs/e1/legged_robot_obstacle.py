@@ -757,7 +757,7 @@ class LeggedRobotObstacle(BaseTask):
         self.gym.refresh_force_sensor_tensor(self.sim)
             
         # create some wrapper tensors for different slices
-        self.root_states = gymtorch.wrap_tensor(actor_root_state)
+        self.root_states = gymtorch.wrap_tensor(actor_root_state)  # xyz+q+Vxyz+Vrpy
         self.rigid_body_states = gymtorch.wrap_tensor(rigid_body_state_tensor).view(self.num_envs, -1, 13)
         self.dof_state = gymtorch.wrap_tensor(dof_state_tensor)
         self.dof_pos = self.dof_state.view(self.num_envs, self.num_dof, 2)[..., 0]
@@ -1139,21 +1139,25 @@ class LeggedRobotObstacle(BaseTask):
             gymutil.draw_lines(sphere_geom, self.gym, self.viewer, self.envs[i], sphere_pose)
     
     def _draw_goals(self):
-        sphere_geom = gymutil.WireframeSphereGeometry(0.1, 32, 32, None, color=(1, 0, 0))
+        sphere_geom_next = gymutil.WireframeSphereGeometry(0.1, 32, 32, None, color=(0, 0.1, 0.9))
         sphere_geom_cur = gymutil.WireframeSphereGeometry(0.1, 32, 32, None, color=(0, 0, 1))
         sphere_geom_reached = gymutil.WireframeSphereGeometry(self.cfg.env.next_goal_threshold, 32, 32, None, color=(0, 1, 0))
-        goals = self.terrain_goals[self.terrain_levels[self.lookat_id], self.terrain_types[self.lookat_id]].cpu().numpy()
-        for i, goal in enumerate(goals):
-            goal_xy = goal[:2] + self.terrain.cfg.border_size
-            pts = (goal_xy/self.terrain.cfg.horizontal_scale).astype(int)
-            goal_z = self.height_samples[pts[0], pts[1]].cpu().item() * self.terrain.cfg.vertical_scale
-            pose = gymapi.Transform(gymapi.Vec3(goal[0], goal[1], goal_z), r=None)
-            if i == self.cur_goal_idx[self.lookat_id].cpu().item():
-                gymutil.draw_lines(sphere_geom_cur, self.gym, self.viewer, self.envs[self.lookat_id], pose)
-                if self.reached_goal_ids[self.lookat_id]:
-                    gymutil.draw_lines(sphere_geom_reached, self.gym, self.viewer, self.envs[self.lookat_id], pose)
-            else:
-                gymutil.draw_lines(sphere_geom, self.gym, self.viewer, self.envs[self.lookat_id], pose)
+
+        goal = self.cur_goals[self.lookat_id].cpu().numpy()
+        goal_xy = goal[:2] + self.terrain.cfg.border_size
+        pts = (goal_xy/self.terrain.cfg.horizontal_scale).astype(int)
+        goal_z = self.height_samples[pts[0], pts[1]].cpu().item() * self.terrain.cfg.vertical_scale
+        pose = gymapi.Transform(gymapi.Vec3(goal[0], goal[1], goal_z), r=None)
+        gymutil.draw_lines(sphere_geom_cur, self.gym, self.viewer, self.envs[self.lookat_id], pose)
+        if self.reached_goal_ids[self.lookat_id]:
+            gymutil.draw_lines(sphere_geom_reached, self.gym, self.viewer, self.envs[self.lookat_id], pose)
+            
+        goal = self.next_goals[self.lookat_id].cpu().numpy()
+        goal_xy = goal[:2] + self.terrain.cfg.border_size
+        pts = (goal_xy/self.terrain.cfg.horizontal_scale).astype(int)
+        goal_z = self.height_samples[pts[0], pts[1]].cpu().item() * self.terrain.cfg.vertical_scale
+        pose = gymapi.Transform(gymapi.Vec3(goal[0], goal[1], goal_z), r=None)
+        gymutil.draw_lines(sphere_geom_next, self.gym, self.viewer, self.envs[self.lookat_id], pose)
         
         if not self.cfg.depth.use_camera:
             sphere_geom_arrow = gymutil.WireframeSphereGeometry(0.02, 16, 16, None, color=(1, 0.35, 0.25))
@@ -1182,9 +1186,9 @@ class LeggedRobotObstacle(BaseTask):
             for i in range(4):
                 pose = gymapi.Transform(gymapi.Vec3(feet_pos[self.lookat_id, i, 0], feet_pos[self.lookat_id, i, 1], feet_pos[self.lookat_id, i, 2]), r=None)
                 if self.feet_at_edge[self.lookat_id, i]:
-                    gymutil.draw_lines(edge_geom, self.gym, self.viewer, self.envs[i], pose)
+                    gymutil.draw_lines(edge_geom, self.gym, self.viewer, self.envs[self.lookat_id], pose)
                 else:
-                    gymutil.draw_lines(non_edge_geom, self.gym, self.viewer, self.envs[i], pose)
+                    gymutil.draw_lines(non_edge_geom, self.gym, self.viewer, self.envs[self.lookat_id], pose)
     
     def _init_height_points(self):
         """ Returns points at which the height measurments are sampled (in base frame)

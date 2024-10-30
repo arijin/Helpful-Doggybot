@@ -193,9 +193,9 @@ class TerrainObstacle:
         self.env_origins[i, j] = [env_origin_x, env_origin_y, env_origin_z]
         self.terrain_type[i, j] = terrain.idx
         # self.goals[i, j, :, :2] = terrain.goals + [i * self.env_length, j * self.env_width]
-        self.goals[i, j, :, :2] = np.zeros_like(self.goals[i, j, :, :2]) + [i * self.env_length, j * self.env_width]
+        self.goals[i, j, :, :2] = np.zeros_like(self.goals[i, j, :, :2]) + [(i+0.5) * self.env_length, (j+0.5) * self.env_width]
         # self.env_slope_vec[i, j] = terrain.slope_vector
-        self.env_boundaries[i, j] = np.array([start_x, end_x, start_y, end_y])
+        self.env_boundaries[i, j] = np.array([i*self.env_length, (i+1)*self.env_length, j*self.env_width, (j+1)*self.env_width])  # env_origins，goals，env_boundaries 都是比赛场地实际尺寸，不算border，也不转成像素
 
 def generate_maze_like_terrain(terrain, max_wall_height, min_wall_thickness, max_wall_thickness, num_walls, platform_size=1.):
     """
@@ -246,6 +246,8 @@ def generate_maze_like_terrain(terrain, max_wall_height, min_wall_thickness, max
     y1 = (terrain.length - platform_size) // 2
     y2 = (terrain.length + platform_size) // 2
     terrain.height_field_raw[x1:x2, y1:y2] = 0
+    
+    terrain.height_field_raw[:, :] = 0
     
     return terrain
 
