@@ -28,6 +28,7 @@
 #
 # Copyright (c) 2021 ETH Zurich, Nikita Rudin
 
+import numpy as np
 from legged_gym.envs.base.legged_robot_config import LeggedRobotCfg, LeggedRobotCfgPPO
 from legged_gym.envs.e1.legged_robot_obstacle_config import LeggedRobotObsCfg, LeggedRobotObsCfgPPO
 
@@ -50,6 +51,32 @@ class E1BackTrackCfg( LeggedRobotObsCfg ):
             'RL_calf_joint': -1.5,    # [rad]
             'FR_calf_joint': -1.5,  # [rad]
             'RR_calf_joint': -1.5,    # [rad]
+        }
+
+    class sim( LeggedRobotCfg.sim ):
+        body_measure_points = { # transform are related to body frame, a1 params
+            "base": dict(
+                x= [i for i in np.arange(-0.2, 0.31, 0.03)],
+                y= [-0.08, -0.04, 0.0, 0.04, 0.08],
+                z= [i for i in np.arange(-0.061, 0.061, 0.03)],
+                transform= [0., 0., 0.005, 0., 0., 0.],
+            ),
+            "thigh": dict(
+                x= [
+                    -0.16, -0.158, -0.156, -0.154, -0.152,
+                    -0.15, -0.145, -0.14, -0.135, -0.13, -0.125, -0.12, -0.115, -0.11, -0.105, -0.1, -0.095, -0.09, -0.085, -0.08, -0.075, -0.07, -0.065, -0.05,
+                    0.0, 0.05, 0.1,
+                ],
+                y= [-0.015, -0.01, 0.0, -0.01, 0.015],
+                z= [-0.03, -0.015, 0.0, 0.015],
+                transform= [0., 0., -0.1,   0., 1.57079632679, 0.],
+            ),
+            "calf": dict(
+                x= [i for i in np.arange(-0.13, 0.111, 0.03)],
+                y= [-0.015, 0.0, 0.015],
+                z= [-0.015, 0.0, 0.015],
+                transform= [0., 0., -0.11,   0., 1.57079632679, 0.],
+            ),
         }
 
     class control( LeggedRobotObsCfg.control ):

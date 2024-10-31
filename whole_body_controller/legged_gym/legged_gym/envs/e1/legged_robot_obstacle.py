@@ -40,6 +40,7 @@ from isaacgym import gymtorch, gymapi, gymutil
 import torch, torchvision
 from torch import Tensor
 from typing import Tuple, Dict
+import itertools
 
 from legged_gym import LEGGED_GYM_ROOT_DIR
 from legged_gym.envs.base.base_task import BaseTask
@@ -111,6 +112,7 @@ class LeggedRobotObstacle(BaseTask):
         self.total_env_steps_counter = 0
 
         self.reset_idx(torch.arange(self.num_envs, device=self.device))
+        self.volume_sample_points_refreshed = False
         self.post_physics_step()
 
     def step(self, actions):
@@ -119,6 +121,7 @@ class LeggedRobotObstacle(BaseTask):
         Args:
             actions (torch.Tensor): Tensor of shape (num_envs, num_actions_per_env)
         """
+        self.volume_sample_points_refreshed = False
         actions = self.reindex(actions)
 
         actions.to(self.device)
@@ -277,6 +280,7 @@ class LeggedRobotObstacle(BaseTask):
         if self.viewer and self.enable_viewer_sync and self.debug_viz:
             self.gym.clear_lines(self.viewer)
             # self._draw_height_samples()
+            self._draw_volume_sample_points_vis()
             self._draw_goals()
             self._draw_feet()
             if self.cfg.depth.use_camera:
@@ -802,6 +806,13 @@ class LeggedRobotObstacle(BaseTask):
             self.height_points = self._init_height_points()
         self.measured_heights = 0
 
+        # body points
+        if hasattr(self.cfg.sim, "body_measure_points"):
+            self._init_body_volume_points()
+            self._init_volume_sample_points()
+            print("Total number of volume estimation points for each robot is:", self.volume_sample_points.shape[1])
+
+
         # joint positions offsets and PD gains
         self.default_dof_pos = torch.zeros(self.num_dof, dtype=torch.float, device=self.device, requires_grad=False)
         self.default_dof_pos_all = torch.zeros(self.num_envs, self.num_dof, dtype=torch.float, device=self.device, requires_grad=False)
@@ -833,6 +844,112 @@ class LeggedRobotObstacle(BaseTask):
                                             self.cfg.depth.buffer_len, 
                                             self.cfg.depth.resized[1], 
                                             self.cfg.depth.resized[0]).to(self.device)
+
+    def _init_body_volume_points(self):
+        """ Generate a series of points grid so that they can be bind to those rigid bodies
+        By 'those rigid bodies', we mean the rigid bodies that are specified in the `body_measure_points`
+        """
+        # read and specify the order of which body to sample from and its relative sample points.
+        self.body_measure_name_order = [] # order specified
+        self.body_sample_indices = [] # index in environment domain
+        # NOTE: assuming all envs have the same number of actors and rigid bodies
+        rigid_body_names = self.gym.get_actor_rigid_body_names(self.envs[0], self.actor_handles[0])
+        for name, measure_name in itertools.product(rigid_body_names, self.cfg.sim.body_measure_points.keys()):
+            if measure_name in name:
+                self.body_sample_indices.append(
+                    self.gym.find_actor_rigid_body_index(
+                        self.envs[0],
+                        self.actor_handles[0],
+                        name,
+                        gymapi.IndexDomain.DOMAIN_ENV,
+                ))
+                self.body_measure_name_order.append(measure_name) # order specified
+        self.body_sample_indices = torch.tensor(self.body_sample_indices, device= self.sim_device).flatten() # n_bodies (each env)
+
+        # compute and store each sample points in body frame.
+        self.body_volume_points = dict()
+        for measure_name, points_cfg in self.cfg.sim.body_measure_points.items():
+            x = torch.tensor(points_cfg["x"], device= self.device, dtype= torch.float32, requires_grad= False)
+            y = torch.tensor(points_cfg["y"], device= self.device, dtype= torch.float32, requires_grad= False)
+            z = torch.tensor(points_cfg["z"], device= self.device, dtype= torch.float32, requires_grad= False)
+            t = torch.tensor(points_cfg["transform"][0:3], device= self.device, dtype= torch.float32, requires_grad= False)
+            grid_x, grid_y, grid_z = torch.meshgrid(x, y, z)
+            grid_points = torch.stack([
+                grid_x.flatten(),
+                grid_y.flatten(),
+                grid_z.flatten(),
+            ], dim= -1) # n_points, 3
+            if "points" in points_cfg.keys():
+                # additional unstructured points
+                unstructured_points = torch.tensor(points_cfg["points"], device= self.device, dtype= torch.float32)
+                assert len(unstructured_points.shape) == 2 and unstructured_points.shape[1] == 3, "Unstructured points must be a list of 3D points"
+                grid_points = torch.cat([
+                    grid_points,
+                    unstructured_points,
+                ], dim= 0)
+            q = quat_from_euler_xyz(
+                torch.tensor(points_cfg["transform"][3], device= self.sim_device, dtype= torch.float32),
+                torch.tensor(points_cfg["transform"][4], device= self.sim_device, dtype= torch.float32),
+                torch.tensor(points_cfg["transform"][5], device= self.sim_device, dtype= torch.float32),
+            )
+            self.body_volume_points[measure_name] = tf_apply(
+                q.expand(grid_points.shape[0], 4),
+                t.expand(grid_points.shape[0], 3),
+                grid_points,
+            )
+            
+    def _init_volume_sample_points(self):
+        """ Build sample points for penetration volume estimation
+        NOTE: self.cfg.sim.body_measure_points must be a dict with
+            key: body name (or part of the body name) to estimate
+            value: dict(
+                x, y, z: sample points to form a meshgrid
+                transform: [x, y, z, roll, pitch, yaw] for transforming the meshgrid w.r.t body frame
+            )
+        """
+        num_sample_points_per_env = 0
+        for body_name in self.body_measure_name_order:
+            for measure_name in self.body_volume_points.keys():
+                if measure_name in body_name:
+                    num_sample_points_per_env += self.body_volume_points[measure_name].shape[0]
+        self.volume_sample_points = torch.zeros(
+            (self.num_envs, num_sample_points_per_env, 3),
+            device= self.device,
+            dtype= torch.float32,    
+        )
+        self.volume_sample_points_vel = torch.zeros(
+            (self.num_envs, num_sample_points_per_env, 3),
+            device= self.device,
+            dtype= torch.float32,    
+        )
+
+    def refresh_volume_sample_points(self):
+        """ NOTE: call this method whenever you need to access `volume_sample_points` and `volume_sample_points_vel`,
+        Don't worry about repeated calls, it will only compute once in each env.step() call.
+        """
+        if self.volume_sample_points_refreshed:
+            # use `volume_sample_points_refreshed` to avoid repeated computation
+            return
+        sample_points_start_idx = 0
+        for body_idx, body_measure_name in enumerate(self.body_measure_name_order):
+            volume_points = self.body_volume_points[body_measure_name] # (n_points, 3)
+            num_volume_points = volume_points.shape[0]
+            rigid_body_index = self.body_sample_indices[body_idx:body_idx+1] # size: torch.Size([1])
+            point_positions_w, point_velocities_w = self._get_target_pos_vel(
+                rigid_body_index.expand(num_volume_points,),
+                volume_points,
+                domain= gymapi.DOMAIN_ENV,
+            )
+            self.volume_sample_points_vel[
+                :,
+                sample_points_start_idx: sample_points_start_idx + num_volume_points,
+            ] = point_velocities_w
+            self.volume_sample_points[
+                :,
+                sample_points_start_idx: sample_points_start_idx + num_volume_points,
+            ] = point_positions_w
+            sample_points_start_idx += num_volume_points
+        self.volume_sample_points_refreshed = True
 
     def _prepare_reward_function(self):
         """ Prepares a list of reward functions, whcih will be called to compute the total reward.
@@ -1189,7 +1306,15 @@ class LeggedRobotObstacle(BaseTask):
                     gymutil.draw_lines(edge_geom, self.gym, self.viewer, self.envs[self.lookat_id], pose)
                 else:
                     gymutil.draw_lines(non_edge_geom, self.gym, self.viewer, self.envs[self.lookat_id], pose)
-    
+
+    def _draw_volume_sample_points_vis(self):
+        self.refresh_volume_sample_points()
+        sphere_geom = gymutil.WireframeSphereGeometry(0.005, 4, 4, None, color=(0., 1., 0.))
+        for env_idx in range(self.num_envs):
+            for point_idx in range(self.volume_sample_points.shape[1]):
+                sphere_pose = gymapi.Transform(gymapi.Vec3(*self.volume_sample_points[env_idx, point_idx]), r= None)
+                gymutil.draw_lines(sphere_geom, self.gym, self.viewer, self.envs[env_idx], sphere_pose)
+
     def _init_height_points(self):
         """ Returns points at which the height measurments are sampled (in base frame)
 
@@ -1208,6 +1333,53 @@ class LeggedRobotObstacle(BaseTask):
             points[i, :, 0] = grid_x.flatten() + xy_noise[:, 0]
             points[i, :, 1] = grid_y.flatten() + xy_noise[:, 1]
         return points
+
+    def _get_target_pos_vel(self, target_link_indices, target_local_pos, domain= gymapi.DOMAIN_SIM):
+        """ Get the target pos/vel in world frame, given the body_indices (SIM_DOMAIN) and
+        the local position of which this target is rigidly attached to.
+        
+        NOTE: Before this method, `refresh_rigid_body_state_tensor` must be called before this 
+        function and after each `gym.simulate`.
+
+        Args:
+            target_link_indices (torch.Tensor): shape (n_envs*n_targets_per_robot) for DOMAIN_SIM,
+                or (n_targets_per_robot,) for DOMAIN_ENV
+            target_local_pos (torch.Tensor): shape (n_targets_per_robot, 3)
+            domain: gymapi.DOMAIN_SIM or gymapi.DOMAIN_ENV, not recommending using gymapi.DOMAIN_ACTOR
+                since a env may contain multiple actors with different bodies.
+
+        Returns:
+            target_pos_world (torch.Tensor): shape (n_envs, n_targets_per_robot, 3)
+            target_vel_world (torch.Tensor): shape (n_envs, n_targets_per_robot, 3)
+        """
+        # shape: (n_envs, n_targets_per_robot, 13)
+        if domain == gymapi.DOMAIN_SIM:
+            target_body_states = self.rigid_body_states[target_link_indices].view(self.num_envs, -1, 13)
+        elif domain == gymapi.DOMAIN_ENV:
+            # NOTE: maybe also acceping DOMAIN_ACTOR, but do this at your own risk
+            target_body_states = self.rigid_body_states.view(self.num_envs, -1, 13)[:, target_link_indices]
+        else:
+            raise ValueError(f"Unsupported domain: {domain}")
+        # shape: (n_envs, n_targets_per_robot, 3)
+        target_pos = target_body_states[:, :, 0:3]
+        # shape: (n_envs, n_targets_per_robot, 4)
+        target_quat = target_body_states[:, :, 3:7]
+        # shape: (n_envs * n_targets_per_robot, 3)
+        target_pos_world_ = tf_apply(
+            target_quat.view(-1, 4),
+            target_pos.view(-1, 3),
+            target_local_pos.unsqueeze(0).expand(self.num_envs, *target_local_pos.shape).reshape(-1, 3), # using reshape because of contiguous issue
+        )
+        # shape: (n_envs, n_targets_per_robot, 3)
+        target_pos_world = target_pos_world_.view(self.num_envs, -1, 3)
+        # shape: (n_envs, n_targets_per_robot, 3)
+        # NOTE: assuming the angular velocity here is the same as the time derivative of the axis-angle
+        target_vel_world = torch.cross(
+            target_body_states[:, :, 10:13],
+            target_local_pos.unsqueeze(0).expand(self.num_envs, *target_local_pos.shape),
+            dim= -1,
+        )
+        return target_pos_world, target_vel_world
 
     def get_foot_contacts(self):
         foot_contacts_bool = self.contact_forces[:, self.feet_indices, 2] > 10
