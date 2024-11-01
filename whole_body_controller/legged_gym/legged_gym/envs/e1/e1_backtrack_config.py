@@ -96,12 +96,36 @@ class E1BackTrackCfg( LeggedRobotObsCfg ):
         self_collisions = 1 # 1 to disable, 0 to enable...bitwise filter
   
     class rewards( LeggedRobotObsCfg.rewards ):
+        class scales:
+            # tracking rewards
+            tracking_goal_vel = 1.5  # 机器人的速度方向指向目标时，奖励最大
+            tracking_yaw = 0.5  # ？？？
+            # regularization rewards
+            lin_vel_z = -1.0  # !!! 感觉这边反了，惩罚机器人的z轴速度，尽量在平面上移动，不要上下震动；parkour_step，go2里面已经改成flat惩罚，step不惩罚了
+            ang_vel_xy = -0.05
+            orientation = -1.
+            dof_acc = -2.5e-7
+            collision = -10.
+            action_rate = -0.1
+            delta_torques = -1.0e-7
+            torques = -0.00001
+            hip_pos = -0.5
+            dof_error = -0.04
+            feet_stumble = -1  # 惩罚足部撞击垂直面，全局水平方向上的力大于垂直方向的力
+            feet_edge = -1
+            # backtrack
+            invade_volume = -1.0  # 0.05
+            
+        
         soft_dof_pos_limit = 0.9
         base_height_target = 0.25
     
     class env( LeggedRobotObsCfg.env ):
         min_goal_distance = 1
         max_goal_distance = 2
+        # ADD
+        randomize_start_pos = True
+        randomize_start_yaw = True
 
 class E1BackTrackCfgPPO( LeggedRobotObsCfgPPO ):
     class algorithm( LeggedRobotObsCfgPPO.algorithm ):

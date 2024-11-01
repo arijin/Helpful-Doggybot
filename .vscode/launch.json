@@ -21,10 +21,10 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Python: obs.py",
+      "name": "Python: play_obstacle.py",
       "type": "debugpy",
       "request": "launch",
-      "program": "viz_terrian.py",
+      "program": "play_obstacle.py",
       "console": "integratedTerminal",
       "cwd": "${workspaceFolder}/whole_body_controller/legged_gym/legged_gym/scripts",
       "args": [

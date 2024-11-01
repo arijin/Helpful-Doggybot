@@ -281,6 +281,7 @@ class LeggedRobotObstacle(BaseTask):
             self.gym.clear_lines(self.viewer)
             # self._draw_height_samples()
             self._draw_volume_sample_points_vis()
+            self._draw_obstacles_vis()
             self._draw_goals()
             self._draw_feet()
             if self.cfg.depth.use_camera:
@@ -684,7 +685,8 @@ class LeggedRobotObstacle(BaseTask):
         # base position
         if self.custom_origins:
             self.root_states[env_ids] = self.base_init_state
-            self.root_states[env_ids, :3] += self.env_origins[env_ids]
+            # self.root_states[env_ids, :3] += self.env_origins[env_ids]
+            self.root_states[env_ids, :3] += self.env_starts[env_ids]
             if self.cfg.env.randomize_start_pos:
                 self.root_states[env_ids, :2] += torch_rand_float(-0.3, 0.3, (len(env_ids), 2), device=self.device) # xy position within 1m of the center
             if self.cfg.env.randomize_start_yaw:
@@ -700,7 +702,8 @@ class LeggedRobotObstacle(BaseTask):
             
         else:
             self.root_states[env_ids] = self.base_init_state
-            self.root_states[env_ids, :3] += self.env_origins[env_ids]
+            # self.root_states[env_ids, :3] += self.env_origins[env_ids]
+            self.root_states[env_ids, :3] += self.env_starts[env_ids]
         env_ids_int32 = env_ids.to(dtype=torch.int32)
         self.gym.set_actor_root_state_tensor_indexed(self.sim,
                                                      gymtorch.unwrap_tensor(self.root_states),
@@ -725,7 +728,7 @@ class LeggedRobotObstacle(BaseTask):
             return
         
         dis_to_origin = torch.norm(self.root_states[env_ids, :2] - self.env_origins[env_ids, :2], dim=1)
-        threshold = self.commands[env_ids, 0] * self.cfg.env.episode_length_s
+        threshold = self.commands[env_ids, 0] * self.cfg.env.episode_length_s  # 线速度 * 最大时长（20秒）
         move_up =dis_to_origin > 0.8*threshold
         move_down = dis_to_origin < 0.4*threshold
 
@@ -735,6 +738,7 @@ class LeggedRobotObstacle(BaseTask):
                                                    torch.randint_like(self.terrain_levels[env_ids], self.max_terrain_level),
                                                    torch.clip(self.terrain_levels[env_ids], 0)) # (the minumum level is zero)
         self.env_origins[env_ids] = self.terrain_origins[self.terrain_levels[env_ids], self.terrain_types[env_ids]]
+        self.env_starts[env_ids] = self.terrain_starts[self.terrain_levels[env_ids], self.terrain_types[env_ids]]
         self.env_class[env_ids] = self.terrain_class[self.terrain_levels[env_ids], self.terrain_types[env_ids]]
         self.env_boundaries[env_ids] = self.terrain_boundaries[self.terrain_levels[env_ids], self.terrain_types[env_ids]]
         
@@ -1122,7 +1126,8 @@ class LeggedRobotObstacle(BaseTask):
         for i in tqdm(range(self.num_envs)):
             # create env instance
             env_handle = self.gym.create_env(self.sim, env_lower, env_upper, int(np.sqrt(self.num_envs)))
-            pos = self.env_origins[i].clone()
+            # pos = self.env_origins[i].clone()
+            pos = self.env_starts[i].clone()
             if self.cfg.env.randomize_start_pos:
                 pos[:2] += torch_rand_float(-1., 1., (2,1), device=self.device).squeeze(1)
             if self.cfg.env.randomize_start_yaw:
@@ -1179,6 +1184,7 @@ class LeggedRobotObstacle(BaseTask):
         if self.cfg.terrain.mesh_type in ["heightfield", "trimesh", "obstacle"]:
             self.custom_origins = True
             self.env_origins = torch.zeros(self.num_envs, 3, device=self.device, requires_grad=False)
+            self.env_starts = torch.zeros(self.num_envs, 3, device=self.device, requires_grad=False)
             self.env_class = torch.zeros(self.num_envs, device=self.device, requires_grad=False)
             # put robots at the origins defined by the terrain
             max_init_level = self.cfg.terrain.max_init_terrain_level
@@ -1188,6 +1194,8 @@ class LeggedRobotObstacle(BaseTask):
             self.max_terrain_level = self.cfg.terrain.num_rows
             self.terrain_origins = torch.from_numpy(self.terrain.env_origins).to(self.device).to(torch.float)
             self.env_origins[:] = self.terrain_origins[self.terrain_levels, self.terrain_types]
+            self.terrain_starts = torch.from_numpy(self.terrain.env_starts).to(self.device).to(torch.float)
+            self.env_starts[:] = self.terrain_starts[self.terrain_levels, self.terrain_types]
             
             self.terrain_class = torch.from_numpy(self.terrain.terrain_type).to(self.device).to(torch.float)
             self.env_class[:] = self.terrain_class[self.terrain_levels, self.terrain_types]  # 开始是随机分的
@@ -1218,7 +1226,7 @@ class LeggedRobotObstacle(BaseTask):
             self.env_origins[:, 2] = 0.
 
     def _parse_cfg(self, cfg):
-        self.dt = self.cfg.control.decimation * self.sim_params.dt
+        self.dt = self.cfg.control.decimation * self.sim_params.dt  # 4 * 0.005 = 0.02
         self.obs_scales = self.cfg.normalization.obs_scales
         self.reward_scales = class_to_dict(self.cfg.rewards.scales)
         reward_norm_factor = 1#np.sum(list(self.reward_scales.values()))
@@ -1230,8 +1238,8 @@ class LeggedRobotObstacle(BaseTask):
             self.command_ranges = class_to_dict(self.cfg.commands.max_ranges)
         if self.cfg.terrain.mesh_type not in ['heightfield', 'trimesh']:
             self.cfg.terrain.curriculum = False
-        self.max_episode_length_s = self.cfg.env.episode_length_s
-        self.max_episode_length = np.ceil(self.max_episode_length_s / self.dt)
+        self.max_episode_length_s = self.cfg.env.episode_length_s  # 20
+        self.max_episode_length = np.ceil(self.max_episode_length_s / self.dt)  # 20秒 / 0.02(秒/step) == 1000 steps
 
         self.cfg.domain_rand.push_interval = np.ceil(self.cfg.domain_rand.push_interval_s / self.dt)
 
@@ -1307,13 +1315,51 @@ class LeggedRobotObstacle(BaseTask):
                 else:
                     gymutil.draw_lines(non_edge_geom, self.gym, self.viewer, self.envs[self.lookat_id], pose)
 
+    # def _draw_volume_sample_points_vis(self):
+    #     self.refresh_volume_sample_points()
+    #     sphere_geom = gymutil.WireframeSphereGeometry(0.005, 4, 4, None, color=(0., 1., 0.))
+    #     for env_idx in range(self.num_envs):
+    #         for point_idx in range(self.volume_sample_points.shape[1]):
+    #             sphere_pose = gymapi.Transform(gymapi.Vec3(*self.volume_sample_points[env_idx, point_idx]), r= None)
+    #             gymutil.draw_lines(sphere_geom, self.gym, self.viewer, self.envs[env_idx], sphere_pose)
+
     def _draw_volume_sample_points_vis(self):
         self.refresh_volume_sample_points()
         sphere_geom = gymutil.WireframeSphereGeometry(0.005, 4, 4, None, color=(0., 1., 0.))
+        sphere_penetrate_geom = gymutil.WireframeSphereGeometry(0.005, 4, 4, None, color=(1., 0.1, 0.))
+        invade_mask = self.terrain.get_invade_masks(self.volume_sample_points.view(-1, 3)).view(self.num_envs, -1)
+        if invade_mask[0].sum()==0:
+            return
         for env_idx in range(self.num_envs):
             for point_idx in range(self.volume_sample_points.shape[1]):
                 sphere_pose = gymapi.Transform(gymapi.Vec3(*self.volume_sample_points[env_idx, point_idx]), r= None)
-                gymutil.draw_lines(sphere_geom, self.gym, self.viewer, self.envs[env_idx], sphere_pose)
+                if invade_mask[env_idx, point_idx]:
+                    gymutil.draw_lines(sphere_penetrate_geom, self.gym, self.viewer, self.envs[env_idx], sphere_pose)
+                else:
+                    gymutil.draw_lines(sphere_geom, self.gym, self.viewer, self.envs[env_idx], sphere_pose)
+
+    def _draw_obstacles_vis(self):
+        obstacle_segments = self.terrain.get_obstacle_segments()
+
+        # Track the starting point of each obstacle
+        current_obstacle_start = None
+
+        for idx, (start_coords, end_coords) in enumerate(obstacle_segments):
+            start_vec3 = gymapi.Vec3(*start_coords)
+            end_vec3 = gymapi.Vec3(*end_coords)
+            color = gymapi.Vec3(1.0, 0.0, 0.0)  # Red color for obstacles
+
+            # Draw the current segment
+            gymutil.draw_line(start_vec3, end_vec3, color, self.gym, self.viewer, self.envs[self.lookat_id])
+
+            # Store the starting point of the current obstacle
+            if idx == 0 or start_coords != obstacle_segments[idx - 1][1]:
+                current_obstacle_start = start_vec3
+
+            # Check if this is the last segment of the obstacle and needs closure
+            if idx == len(obstacle_segments) - 1 or end_coords != obstacle_segments[idx + 1][0]:
+                # Draw a line to close the loop back to the starting point
+                gymutil.draw_line(end_vec3, current_obstacle_start, color, self.gym, self.viewer, self.envs[self.lookat_id])
 
     def _init_height_points(self):
         """ Returns points at which the height measurments are sampled (in base frame)
@@ -1509,3 +1555,9 @@ class LeggedRobotObstacle(BaseTask):
         self.feet_at_edge = self.contact_filt & feet_at_edge
         rew = (self.terrain_levels > 3) * torch.sum(self.feet_at_edge, dim=-1)
         return rew
+
+    def _reward_invade_volume(self):
+        self.refresh_volume_sample_points()
+        invade_mask = self.terrain.get_invade_masks(self.volume_sample_points.view(-1, 3)).view(self.num_envs, -1)
+        invade_mask = invade_mask.float() * (torch.norm(self.volume_sample_points_vel, dim= -1) + 1e-3)
+        return torch.sum(invade_mask, dim= -1)

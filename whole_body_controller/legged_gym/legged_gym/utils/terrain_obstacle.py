@@ -29,6 +29,7 @@
 # Copyright (c) 2021 ETH Zurich, Nikita Rudin
 
 import numpy as np
+import torch
 from numpy.random import choice
 from scipy import interpolate
 import random
@@ -39,6 +40,30 @@ from pydelatin import Delatin
 import pyfqmr
 from scipy.ndimage import binary_dilation
 
+class SubTerrain:
+    def __init__(self, terrain_name="terrain", width=256, length=256, vertical_scale=1.0, horizontal_scale=1.0):
+        self.terrain_name = terrain_name
+        self.vertical_scale = vertical_scale
+        self.horizontal_scale = horizontal_scale
+        self.width = width
+        self.length = length
+        self.height_field_raw = np.zeros((self.width, self.length), dtype=np.int16)
+        self.mask_field_raw = np.zeros((self.width, self.length), dtype=np.int8)
+        self.info = {
+            "geometry": [],
+            "properties" : {}
+        }
+        # "geometry" : 
+        # {
+        #     "coordinates" : 
+        #     [
+        #     [ 121.40033469999999, 31.329894799999998, 104857.5 ],
+        #     [ 121.40044349999999, 31.329921899999999, 104857.5 ],
+        #     [ 121.4004817, 31.329931699999999, 104857.5 ]
+        #     ],
+        #     "type" : "LineString"
+        # },
+        # "properties" : {}
 
 class TerrainObstacle:
     def __init__(self, cfg: LeggedRobotCfg.terrain, num_robots) -> None:
@@ -54,12 +79,14 @@ class TerrainObstacle:
         self.proportions = [np.sum(cfg.terrain_proportions[:i+1]) for i in range(len(cfg.terrain_proportions))]
         self.cfg.num_sub_terrains = cfg.num_rows * cfg.num_cols
         self.env_origins = np.zeros((cfg.num_rows, cfg.num_cols, 3))
+        self.env_starts = np.zeros((cfg.num_rows, cfg.num_cols, 3))
         self.terrain_type = np.zeros((cfg.num_rows, cfg.num_cols))
         # self.env_slope_vec = np.zeros((cfg.num_rows, cfg.num_cols, 3))
         self.goals = np.zeros((cfg.num_rows, cfg.num_cols, cfg.num_goals, 3))
         self.num_goals = cfg.num_goals
         self.env_boundaries = np.zeros((cfg.num_rows, cfg.num_cols, 4))  # x_min x_max y_min y_max
-
+        self.obstacle_infos = []
+        
         self.width_per_env_pixels = int(self.env_width / cfg.horizontal_scale)
         self.length_per_env_pixels = int(self.env_length / cfg.horizontal_scale)
 
@@ -68,6 +95,7 @@ class TerrainObstacle:
         self.tot_rows = int(cfg.num_rows * self.length_per_env_pixels) + 2 * self.border
 
         self.height_field_raw = np.zeros((self.tot_rows , self.tot_cols), dtype=np.int16)
+        self.mask_field_raw = np.zeros((self.tot_rows, self.tot_cols), dtype=np.int8)
         if cfg.curriculum:
             self.curiculum()
         elif cfg.selected:
@@ -151,7 +179,7 @@ class TerrainObstacle:
         terrain_utils.random_uniform_terrain(terrain, min_height=-height, max_height=height, step=0.005, downsampled_scale=self.cfg.downsampled_scale)
 
     def make_terrain(self, choice, difficulty):
-        terrain = terrain_utils.SubTerrain(   "terrain",
+        terrain = SubTerrain(   "terrain",
                                 width=self.length_per_env_pixels,
                                 length=self.width_per_env_pixels,
                                 vertical_scale=self.cfg.vertical_scale,
@@ -178,6 +206,7 @@ class TerrainObstacle:
         start_y = self.border + j * self.width_per_env_pixels
         end_y = self.border + (j + 1) * self.width_per_env_pixels
         self.height_field_raw[start_x: end_x, start_y:end_y] = terrain.height_field_raw
+        self.mask_field_raw[start_x: end_x, start_y:end_y] = terrain.mask_field_raw
 
         # env_origin_x = (i + 0.5) * self.env_length
         env_origin_x = i * self.env_length + 1.0
@@ -191,11 +220,89 @@ class TerrainObstacle:
         else:
             env_origin_z = np.max(terrain.height_field_raw[x1:x2, y1:y2])*terrain.vertical_scale
         self.env_origins[i, j] = [env_origin_x, env_origin_y, env_origin_z]
+        self.env_starts[i, j] = [(i + 0.5) * self.env_length, (j + 0.5) * self.env_width, env_origin_z]
         self.terrain_type[i, j] = terrain.idx
         # self.goals[i, j, :, :2] = terrain.goals + [i * self.env_length, j * self.env_width]
         self.goals[i, j, :, :2] = np.zeros_like(self.goals[i, j, :, :2]) + [(i+0.5) * self.env_length, (j+0.5) * self.env_width]
         # self.env_slope_vec[i, j] = terrain.slope_vector
         self.env_boundaries[i, j] = np.array([i*self.env_length, (i+1)*self.env_length, j*self.env_width, (j+1)*self.env_width])  # env_origins，goals，env_boundaries 都是比赛场地实际尺寸，不算border，也不转成像素
+        
+        terrain.info["properties"]["row"] = i
+        terrain.info["properties"]["col"] = j
+        self.obstacle_infos.append(terrain.info)
+        
+    def get_invade_masks(self, sample_points):
+        """ Compute the penetrations of the sample points w.r.t the virtual obstacle.
+        NOTE: this implementation is specifically tailored to these 3 obstacles.
+            Review the logic if you need to add other types of obstacles.
+        Args:
+            sample_points: torch tensor of shape (N, 3) with world-frame coordinates (not related to env origin)
+                s is the number of sample points for each env.
+            mask_only: If set, the depth will only be 0 (no penetration) or 1 (have penetration)
+        Return:
+            penetration_depth: torch tensor (N,) >= 0.
+        """
+        # Extract x and y coordinates from sample_points (assuming sample_points is n x 3)
+        x_coords = sample_points[:, 0]
+        y_coords = sample_points[:, 1]
+
+        # Convert to pixel coordinates, then add border offset
+        x_indices = ((x_coords / self.cfg.horizontal_scale) + self.border).long().clamp(0, self.tot_rows - 1)
+        y_indices = ((y_coords / self.cfg.horizontal_scale) + self.border).long().clamp(0, self.tot_cols - 1)
+        
+        x_indices_cpu = x_indices.cpu()
+        y_indices_cpu = y_indices.cpu()
+        
+        invade_masks = torch.from_numpy(self.mask_field_raw[x_indices_cpu, y_indices_cpu]).to(sample_points.device)
+        if not invade_masks.sum()==0:
+            aaa = 0
+        return invade_masks
+    
+    def get_obstacle_segments(self):
+        """
+        Retrieves all obstacle geometries as transformed 3D line segments.
+
+        Returns:
+            List[Tuple[Tuple[float, float, float], Tuple[float, float, float]]]: 
+            List of tuples with start and end coordinates for each obstacle line segment in 3D space.
+        """
+        obstacle_segments = []
+
+        for obstacle_info in self.obstacle_infos:
+            # Calculate environment offsets for the obstacle based on row and column
+            row, col = obstacle_info["properties"]["row"], obstacle_info["properties"]["col"]
+            pixel_offset_x = self.border + row * self.length_per_env_pixels
+            pixel_offset_y = self.border + col * self.width_per_env_pixels
+            world_offset_x = row * self.env_length
+            world_offset_y = col * self.env_width
+
+            # Process each line segment in the obstacle's geometry
+            for obstacle in obstacle_info["geometry"]:
+                coordinates = obstacle["coordinates"]
+
+                for idx in range(len(coordinates) - 1):
+                    # Start and end 2D coordinates in pixels
+                    start_2d, end_2d = coordinates[idx], coordinates[idx + 1]
+
+                    # Compute start and end pixel positions with Z from height_field_raw
+                    start_pixel_x, start_pixel_y = int(start_2d[0] + pixel_offset_x), int(start_2d[1] + pixel_offset_y)
+                    end_pixel_x, end_pixel_y = int(end_2d[0] + pixel_offset_x), int(end_2d[1] + pixel_offset_y)
+                    start_z = self.height_field_raw[start_pixel_x, start_pixel_y] * self.cfg.vertical_scale
+                    end_z = self.height_field_raw[end_pixel_x, end_pixel_y] * self.cfg.vertical_scale
+
+                    # Convert start and end to world coordinates
+                    start_world_x = start_2d[0] * self.cfg.horizontal_scale + world_offset_x
+                    start_world_y = start_2d[1] * self.cfg.horizontal_scale + world_offset_y
+                    end_world_x = end_2d[0] * self.cfg.horizontal_scale + world_offset_x
+                    end_world_y = end_2d[1] * self.cfg.horizontal_scale + world_offset_y
+
+                    # Append 3D line segment
+                    obstacle_segments.append(
+                        ((start_world_x, start_world_y, start_z), (end_world_x, end_world_y, end_z))
+                    )
+
+        return obstacle_segments
+        
 
 def generate_maze_like_terrain(terrain, max_wall_height, min_wall_thickness, max_wall_thickness, num_walls, platform_size=1.):
     """
@@ -234,11 +341,33 @@ def generate_maze_like_terrain(terrain, max_wall_height, min_wall_thickness, max
             start_i = np.random.choice(range(0, i-thickness, 4))
             start_j = np.random.choice(range(0, j-wall_length, 4))
             terrain.height_field_raw[start_i:start_i+thickness, start_j:start_j+wall_length] = np.random.choice(height_range)
+            terrain.mask_field_raw[start_i:start_i+thickness, start_j:start_j+wall_length] = 1
+            wall_info = {
+                "type": "LineString",
+                "coordinates": [
+                    [start_i, start_j],
+                    [start_i + thickness, start_j],
+                    [start_i + thickness, start_j + wall_length],
+                    [start_i, start_j + wall_length]
+                ]
+            }
         else:
             # Vertical wall
             start_i = np.random.choice(range(0, i-wall_length, 4))
             start_j = np.random.choice(range(0, j-thickness, 4))
             terrain.height_field_raw[start_i:start_i+wall_length, start_j:start_j+thickness] = np.random.choice(height_range)
+            terrain.mask_field_raw[start_i:start_i+wall_length, start_j:start_j+thickness] = 1
+            wall_info = {
+                "type": "LineString",
+                "coordinates": [
+                    [start_i, start_j],
+                    [start_i + wall_length, start_j],
+                    [start_i + wall_length, start_j + thickness],
+                    [start_i, start_j + thickness]
+                ]
+            }
+        
+        terrain.info["geometry"].append(wall_info)
 
     # Keep a flat platform in the center for the robot's starting point
     x1 = (terrain.width - platform_size) // 2
@@ -250,46 +379,6 @@ def generate_maze_like_terrain(terrain, max_wall_height, min_wall_thickness, max
     terrain.height_field_raw[:, :] = 0
     
     return terrain
-
-def discrete_obstacles_terrain(terrain, max_height, min_size, max_size, num_rects, platform_size=1.):
-    """
-    Generate a terrain with gaps
-
-    Parameters:
-        terrain (terrain): the terrain
-        max_height (float): maximum height of the obstacles (range=[-max, -max/2, max/2, max]) [meters]
-        min_size (float): minimum size of a rectangle obstacle [meters]
-        max_size (float): maximum size of a rectangle obstacle [meters]
-        num_rects (int): number of randomly generated obstacles
-        platform_size (float): size of the flat platform at the center of the terrain [meters]
-    Returns:
-        terrain (SubTerrain): update terrain
-    """
-    # switch parameters to discrete units
-    max_height = int(max_height / terrain.vertical_scale)
-    min_size = int(min_size / terrain.horizontal_scale)
-    max_size = int(max_size / terrain.horizontal_scale)
-    platform_size = int(platform_size / terrain.horizontal_scale)
-
-    (i, j) = terrain.height_field_raw.shape
-    height_range = [-max_height, -max_height // 2, max_height // 2, max_height]  # (0.03, 0.18)
-    width_range = range(min_size, max_size, 4)  # (0.5, 2)
-    length_range = range(min_size, max_size, 4)  # (0.5, 2)
-
-    for _ in range(num_rects):  # 20
-        width = np.random.choice(width_range)
-        length = np.random.choice(length_range)
-        start_i = np.random.choice(range(0, i-width, 4))
-        start_j = np.random.choice(range(0, j-length, 4))
-        terrain.height_field_raw[start_i:start_i+width, start_j:start_j+length] = np.random.choice(height_range)
-
-    x1 = (terrain.width - platform_size) // 2
-    x2 = (terrain.width + platform_size) // 2
-    y1 = (terrain.length - platform_size) // 2
-    y2 = (terrain.length + platform_size) // 2
-    terrain.height_field_raw[x1:x2, y1:y2] = 0
-    return terrain
-
 
 def convert_heightfield_to_trimesh_delatin(height_field_raw, horizontal_scale, vertical_scale, max_error=0.01):
     mesh = Delatin(np.flip(height_field_raw, axis=1).T, z_scale=vertical_scale, max_error=max_error)
