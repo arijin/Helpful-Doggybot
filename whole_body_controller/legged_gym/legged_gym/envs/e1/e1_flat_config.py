@@ -33,7 +33,13 @@ from legged_gym.envs.base.legged_robot_config import LeggedRobotCfg, LeggedRobot
 from legged_gym.envs.e1.legged_robot_obstacle_config import LeggedRobotObsCfg, LeggedRobotObsCfgPPO
 
 
-class E1BackTrackCfg( LeggedRobotObsCfg ):
+class E1FlatCfg( LeggedRobotObsCfg ):
+    class terrain( LeggedRobotObsCfg.terrain ):
+        terrain_length = 12.
+        terrain_width = 12
+        num_rows= 10 # number of terrain rows (levels)  # spreaded is benifitiall !
+        num_cols = 10 # number of terrain cols (types)
+    
     class init_state( LeggedRobotObsCfg.init_state ):
         pos = [0.0, 0.0, 0.42] # x,y,z [m]
         default_joint_angles = { # = target angles [rad] when action = 0.0
@@ -114,7 +120,7 @@ class E1BackTrackCfg( LeggedRobotObsCfg ):
             feet_stumble = -1  # 惩罚足部撞击垂直面，全局水平方向上的力大于垂直方向的力
             feet_edge = -1
             # backtrack
-            invade_volume = -1.0  # 0.05
+            # invade_volume = -1.0  # 0.05
             
         
         soft_dof_pos_limit = 0.9
@@ -132,11 +138,11 @@ class E1BackTrackCfg( LeggedRobotObsCfg ):
         rand_y_range = 0.5
         randomize_start_pitch = True
         rand_pitch_range = 1.6
-class E1BackTrackCfgPPO( LeggedRobotObsCfgPPO ):
+class E1FlatCfgPPO( LeggedRobotObsCfgPPO ):
     class algorithm( LeggedRobotObsCfgPPO.algorithm ):
         entropy_coef = 0.01
     class runner( LeggedRobotObsCfgPPO.runner ):
         run_name = ''
-        experiment_name = 'rough_a1'
+        experiment_name = 'flat_e1'
 
   

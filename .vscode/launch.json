@@ -35,3 +35,22 @@
     }
   ]
 }
+
+// {
+//   "version": "0.2.0",
+//   "configurations": [
+//     {
+//       "name": "Python: train.py",
+//       "type": "debugpy",
+//       "request": "launch",
+//       "program": "train.py",
+//       "console": "integratedTerminal",
+//       "cwd": "${workspaceFolder}/whole_body_controller/legged_gym/legged_gym/scripts",
+//       "args": [
+//         "--task", "e1",
+//         "--exptid", "Nov_1101-e1-flat",
+//         "--device", "cuda:0",
+//       ]
+//     }
+//   ]
+// }

@@ -65,12 +65,14 @@ def play(args):
     log_pth = "../../logs/{}/".format(args.proj_name) + args.exptid
 
     env_cfg, train_cfg = task_registry.get_cfgs(name=args.task)
+    
     # override some parameters for testing
     if args.nodelay:
         env_cfg.domain_rand.action_delay_view = 0
     env_cfg.env.num_envs = 1 if not args.save else 64
     env_cfg.env.episode_length_s = 60
     env_cfg.commands.resampling_time = 60
+    
     env_cfg.terrain.num_rows = 5
     env_cfg.terrain.num_cols = 5
     env_cfg.terrain.height = [0.02, 0.02]
@@ -96,6 +98,7 @@ def play(args):
                                     "demo": 0.0}
     
     env_cfg.terrain.terrain_proportions = list(env_cfg.terrain.terrain_dict.values())
+    
     env_cfg.terrain.curriculum = False
     env_cfg.terrain.max_difficulty = True
     
@@ -108,6 +111,7 @@ def play(args):
     env_cfg.domain_rand.randomize_base_com = False
 
     depth_latent_buffer = []
+    
     # prepare environment
     env: LeggedRobot
     env, _ = task_registry.make_env(name=args.task, args=args, env_cfg=env_cfg)

@@ -261,7 +261,7 @@ class LeggedRobotObstacle(BaseTask):
         self.check_termination()
         self.compute_reward()
         env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
-        # self.reset_idx(env_ids)
+        self.reset_idx(env_ids)
 
         # self.cur_goals = self._gather_cur_goals()
         # self.next_goals = self._gather_cur_goals(future=1)
@@ -305,7 +305,7 @@ class LeggedRobotObstacle(BaseTask):
         self.reset_buf = torch.zeros((self.num_envs, ), dtype=torch.bool, device=self.device)
         roll_cutoff = torch.abs(self.roll) > 1.5
         pitch_cutoff = torch.abs(self.pitch) > 1.5
-        reach_goal_cutoff = self.cur_goal_idx >= self.cfg.terrain.num_goals
+        reach_goal_cutoff = self.cur_goal_idx >= self.cfg.terrain.num_goals  # 8
         height_cutoff = self.root_states[:, 2] < -0.25
 
         self.time_out_buf = self.episode_length_buf > self.max_episode_length # no terminal reward for time-outs

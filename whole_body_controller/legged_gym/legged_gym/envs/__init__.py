@@ -46,6 +46,7 @@ from .go2.go2 import Go2
 from .e1.legged_robot_obstacle import LeggedRobotObstacle
 from .e1.legged_robot_obstacle_config import LeggedRobotObsCfg
 from .e1.e1_backtrack_config import E1BackTrackCfg, E1BackTrackCfgPPO
+from .e1.e1_flat_config import E1FlatCfg, E1FlatCfgPPO
 
 import os
 
@@ -59,5 +60,6 @@ task_registry.register( "a1", LeggedRobot, A1ParkourCfg(), A1ParkourCfgPPO() )
 task_registry.register( "go1", LeggedRobot, Go1RoughCfg(), Go1RoughCfgPPO() )
 task_registry.register( "go2", Go2, Go2RoughCfg(), Go2RoughCfgPPO() )
 
+task_registry.register( "e1_flat", LeggedRobotObstacle, E1FlatCfg(), E1FlatCfgPPO() )
 task_registry.register( "e1", LeggedRobotObstacle, E1BackTrackCfg(), E1BackTrackCfgPPO() )
 
